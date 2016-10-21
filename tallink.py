@@ -13,10 +13,7 @@ import datetime
 import os
 
 #Tallinki otsingu URL
-query = 'https://booking.tallink.com/?voyageType=SHUTTLE&eveningDeparture=true&withVehicle=false&from=tal&to=sto&adults=4&children=0&juniors=0&youths=0&date=2016-10-28&locale=et&country=EE&marketUntilDate=2017-12-22&_ga=1.98495196.218069809.1475764556'
-
-#Valjumiskuupaev
-date = "2016-10-28"
+url = 'https://booking.tallink.com/?voyageType=SHUTTLE&eveningDeparture=true&withVehicle=false&from=tal&to=sto&adults=4&children=0&juniors=0&youths=0&date=2016-10-28&locale=et&country=EE&marketUntilDate=2017-12-22&_ga=1.98495196.218069809.1475764556'
 
 #Millisest summast peab hind vaiksem olema (tavahind, mitte Club One hind)
 price = 136
@@ -24,42 +21,112 @@ price = 136
 #Kontrollimise intervall minutites
 interval = 5
 
+#Kajuti ID, saab veebilehe lähtekoodist
+kajut_id = 'A__ALLERGY'
+
 #------------------------------------------------------------
 #Kui sul on Ubuntu, siis uue hinna puhul saab skript saata notify-send kaudu teate (testitud 16.04 keskkonnas)
-notifications = "true"
-#Saada hinnateade iga kontrolli puhul
-alert_every_price = "false"
+notify= 1
 #------------------------------------------------------------
 
-def checkPrice(query, date, price):
+def getSource(url): #veebilehe lähtekoodi hankimine
+
+	#deklareerime brauseri
 	render = webdriver.PhantomJS()
-	render.get(query)
+
+	#läheme vaateme Tallinki lehel ringi
+	render.get(url)
+
+	#ootame javascripti
 	time.sleep(2)
-	html_source = render.page_source
+
+	#avame spetsiaalsete kajutite nimekirja
+	render.find_element_by_class_name('irregularCabinsTitle').click()
+
+	#ootame javascripti
+	time.sleep(2)
+
+	#võtame terve lehe source
+	source = (render.page_source).encode('utf-8')
+
+	#source otsija deklareerimine
+	parser = BeautifulSoup(str(source), 'html.parser')
+
+	#otsime välja divi kus on kõik kajutid
+	kajutid = parser.findAll(attrs={'class' : 'travelClass'})
+
+	#ainult 1 div saabki olla sellise nimega, lol
+	source = kajutid[0]
+
+	#sulgeme lehitseja
 	render.close()
+
+	#protsessi lõpetamine
 	render.quit()
+
+	#kui raibe elab veel siis enam mitte
 	os.system('pkill -9 phantomjs')
 
-	parser = BeautifulSoup(html_source, 'html.parser')
+	#tagastame kajutite div htmli
+	return source
 
-	last_price = ""
-	for hit in parser.findAll(attrs={'datetime' : date}):
-		parser = BeautifulSoup(str(hit), 'html.parser')
-		hind = parser.find(attrs={'class' : 'price'}).text
 
-		if(int(hind.split(" ")[0]) < price):
-			print("\033[91m [" + str(datetime.datetime.now()) + "] - Hind: " + str(hind.split(" ")[0]) + "€ - hind soodsam!")
-		else:
-			print("\033[93m [" + str(datetime.datetime.now()) + "] - Hind: " + str(hind.split(" ")[0]) + "€ - hind sama või kallim")
+def kajutiStaatus(source, kajut_id):
 
-		if(notifications == "true"):
-			if(int(hind.split(" ")[0]) < price):
-				os.system('notify-send "Tallink kruiis" "HIND ON ODAVAM! Uus hind on ' + str(hind.split(" ")[0]) + '€"')
-			elif(alert_every_price == "true"):
-				os.system('notify-send "Tallink kruiis" "Hetkel on kruiisi hind ' + str(hind.split(" ")[0]) + '€"')
+	#kajutite otsija deklareerimine
+	parser = BeautifulSoup(str(source), 'html.parser')
 
+	#otsime välja vastava kajuti
+	kajutid = parser.findAll(attrs={'value' : kajut_id})
+
+	#kajuti hinnaotsija deklareerimine
+	parser = BeautifulSoup(str(kajutid[0]), 'html.parser')
+
+	#esimene span väärtus annab kajuti hinna / olemasolu
+	saadavus = (parser.find('span').text).encode('utf-8')
+
+	if(saadavus == "Välja müüdud"):
+		#kajut välja müüdud
+		return "false"
+	else:
+		#kajut saadaval, sebime hinna
+		hind = saadavus.split(" ")[0]
+
+		if(notify):
+			os.system('notify-send "Tallink kruiis" "Kajut saadaval! Hind: ' + hind + '€"')
+
+		#tagastame hinna
+		return hind
+
+
+def hindAnalyys(hind, maxHind): #hinna analüüsimine, kas suurem või mitte
+
+	#hind langenud
+	if(int(hind) < int(maxHind)):
+		#kirjutame konsooli teate
+		print(str(datetime.datetime.now().time()) + ' - Kajuti hind on madalam - Uus hind: ' + hind + '€')
+		if(notify):
+			os.system('notify-send "Tallink kruiis" "Kajuti hind madalam! Uus hind: ' + hind + '€"')
+	#hind tõusnud
+	elif(int(hind) > int(maxHind)):
+		#kirjutame konsooli teate
+		print(str(datetime.datetime.now().time()) + ' - Kajuti hind on tõusnud- Uus hind: ' + hind + '€')
+		if(notify):
+			os.system('notify-send "Tallink kruiis" "Kajuti hind tõusnud! Uus hind: ' + hind + '€"')
+
+	#hind sama
+	else:
+		#kirjutame konsooli teate
+		print(str(datetime.datetime.now().time()) + ' - Kajuti hind pole muutunud - hind: ' + hind + '€')
 
 while(1):
-	checkPrice(query, date, price)
-	print("\033[90mOotan intervalli...");
+
+	if(kajutiStaatus(getSource(url), kajut_id) == "false"):
+		#kajutit pole
+		print(str(datetime.datetime.now().time()) + ' - kajut pole saadaval')
+	else:
+		#kajut saadaval
+		hindAnalyys(kajutiStaatus(getSource(url), kajut_id), price)
+
+	print("Ootan intervalli...");
 	time.sleep(interval*60)
